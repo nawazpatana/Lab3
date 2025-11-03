@@ -1,0 +1,8 @@
+{
+  "model": "random_forest",
+  "accuracy": 0.9766816143497757,
+  "training_time": 0.7999546527862549,
+  "total_time": 1.1294946670532227,
+  "dataset_size": 5572,
+  "test_size": 1115
+}

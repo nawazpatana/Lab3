@@ -1,0 +1,6 @@
+artifact_location: file:///H:/NSU/DCS/Lab3/mlruns/891113437029210117
+creation_time: 1762165021949
+experiment_id: '891113437029210117'
+last_update_time: 1762165021949
+lifecycle_stage: active
+name: train.py
