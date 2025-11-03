@@ -1,231 +1,471 @@
-#!/usr/bin/env python3
-"""
-single_file_mlflow_spam.py
-
-Single-file script that:
-- loads /mnt/data/spam.csv (classic SMS spam dataset)
-- preprocesses text with TF-IDF
-- trains multiple models (LogisticRegression, RandomForest)
-- logs params, metrics, artifacts, and models to MLflow
-- compares runs (by F1) and loads the best model
-- demonstrates inference using the best model
-
-Usage:
-    # Default: trains and logs to local MLflow tracking (sqlite in ./mlruns)
-    python single_file_mlflow_spam.py
-
-    # To use a remote MLflow tracking server (e.g., DagsHub), set:
-    export MLFLOW_TRACKING_URI="https://dagshub.com/<USER>/<REPO>.mlflow"
-    export MLFLOW_EXPERIMENT_NAME="mlflow_dagshub_demo"
-    python single_file_mlflow_spam.py
-
-Notes:
-- Requires: pandas scikit-learn mlflow joblib
-    pip install pandas scikit-learn mlflow joblib
-- For imbalanced spam detection we use F1 as selection metric.
-"""
-import os
-import argparse
-import tempfile
-import joblib
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
+import time
+import json
+import os
 import mlflow
 import mlflow.sklearn
-from mlflow.tracking import MlflowClient
+from datetime import datetime
+import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# CONFIG defaults (can override via env)
-EXPERIMENT_NAME = os.environ.get("MLFLOW_EXPERIMENT_NAME", "train.py")
-DATA_PATH = os.environ.get("SPAM_CSV_PATH", "data/spam.csv")
-RANDOM_STATE = 42
+def setup_mlflow():
+    """Setup MLflow tracking - use local only to avoid issues"""
+    # Use local SQLite database to avoid authentication issues
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    mlflow.set_experiment("spam-detection-experiment")
+    print("✅ MLflow running locally with SQLite")
+    print(f"📊 Experiment: spam-detection-experiment")
 
-def load_data(path=DATA_PATH):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Data not found at {path}")
-    # dataset commonly has columns v1 (label) and v2 (text)
-    df = pd.read_csv(path, encoding="latin-1", low_memory=False)
-    # drop unnamed extras if present
-    df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
-    if {'v1','v2'}.issubset(df.columns):
-        df = df.rename(columns={'v1':'label','v2':'text'})[['text','label']]
-    else:
-        # try to guess: first col label, second col text
-        df.columns = df.columns[:2].tolist()
-        df = df.iloc[:, :2]
-        df.columns = ['label','text']
-    # map labels to 0/1 if strings
-    if df['label'].dtype == object:
-        df['label'] = df['label'].map({'ham':0,'spam':1}).astype(int)
-    return df
+def load_and_preprocess_data():
+    """Load and preprocess the spam dataset"""
+    print("Loading and preprocessing data...")
+    #H:\\NSU\\Lab3\\data\\spam.csv
+    try:
+        # Load the data - using your exact path
+        df = pd.read_csv('./data/spam.csv', encoding='latin-1')
+        
+        # Clean the data - keep only relevant columns and remove empty ones
+        df = df[['v1', 'v2']].copy()
+        df.columns = ['label', 'message']
+        
+        # Remove any rows with missing values
+        df = df.dropna()
+        
+        # Convert labels to binary (ham=0, spam=1)
+        df['label'] = df['label'].map({'ham': 0, 'spam': 1})
+        
+        print(f"✅ Dataset loaded: {len(df)} messages")
+        print(f"📊 Spam: {df['label'].sum()}, Ham: {len(df) - df['label'].sum()}")
+        
+        return df
+        
+    except Exception as e:
+        print(f"❌ Error loading data: {e}")
+        return None
 
-def preprocess_texts(texts, max_features=10000):
-    vect = TfidfVectorizer(max_features=max_features, ngram_range=(1,2))
-    X = vect.fit_transform(texts)
-    return X, vect
+def create_tfidf_features(df, max_features=1000):
+    """Create TF-IDF features and save vectorizer"""
+    try:
+        vectorizer = TfidfVectorizer(max_features=max_features, stop_words='english')
+        X = vectorizer.fit_transform(df['message'])
+        y = df['label']
+        
+        # Save vectorizer for inference
+        os.makedirs('models', exist_ok=True)
+        vectorizer_path = 'models/tfidf_vectorizer.pkl'
+        joblib.dump(vectorizer, vectorizer_path)
+        print(f"✅ Vectorizer saved to: {vectorizer_path}")
+        
+        return X, y, vectorizer
+        
+    except Exception as e:
+        print(f"❌ Error creating TF-IDF features: {e}")
+        return None, None, None
 
-def train_and_log(X_train, y_train, X_val, y_val, vect, experiment_name=EXPERIMENT_NAME):
-    mlflow.set_experiment(experiment_name)
-    models = {
-        "logreg": LogisticRegression(max_iter=2000, random_state=RANDOM_STATE),
-        "random_forest": RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=RANDOM_STATE)
-    }
+def plot_confusion_matrix(y_true, y_pred, model_name):
+    """Create and save confusion matrix plot"""
+    try:
+        plt.figure(figsize=(8, 6))
+        cm = confusion_matrix(y_true, y_pred)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                    xticklabels=['Ham', 'Spam'], 
+                    yticklabels=['Ham', 'Spam'])
+        plt.title(f'Confusion Matrix - {model_name}')
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        plt.tight_layout()
+        
+        # Save plot
+        plot_path = f'confusion_matrix_{model_name.lower().replace(" ", "_")}.png'
+        plt.savefig(plot_path)
+        plt.close()
+        
+        print(f"✅ Confusion matrix saved: {plot_path}")
+        return plot_path
+        
+    except Exception as e:
+        print(f"❌ Error creating confusion matrix: {e}")
+        return None
 
-    # ensure artifacts dir
-    artifacts_dir = "artifacts"
-    os.makedirs(artifacts_dir, exist_ok=True)
-    vect_path = os.path.join(artifacts_dir, "tfidf_vectorizer.joblib")
-    joblib.dump(vect, vect_path)
-
-    results = []
-    for name, model in models.items():
-        with mlflow.start_run(run_name=name) as run:
-            # log some params
-            mlflow.log_param("model_name", name)
-            if hasattr(model, "n_estimators"):
-                mlflow.log_param("n_estimators", getattr(model, "n_estimators"))
-            mlflow.log_param("random_state", RANDOM_STATE)
-
-            # train
-            model.fit(X_train, y_train)
-
-            # eval
-            preds = model.predict(X_val)
-            f1 = f1_score(y_val, preds)
-            acc = accuracy_score(y_val, preds)
-            prec = precision_score(y_val, preds)
-            rec = recall_score(y_val, preds)
-
-            # log metrics
-            mlflow.log_metric("f1", float(f1))
-            mlflow.log_metric("accuracy", float(acc))
-            mlflow.log_metric("precision", float(prec))
-            mlflow.log_metric("recall", float(rec))
-
-            # log vectorizer as artifact for later inference
-            mlflow.log_artifact(vect_path, artifact_path="preprocessing")
-
-            # log the model (mlflow native)
-            mlflow.sklearn.log_model(model, artifact_path="model")
-
-            run_id = run.info.run_id
-            print(f"Logged run {name} (run_id={run_id}) => f1={f1:.4f}, acc={acc:.4f}")
-
-            results.append({
-                "name": name,
-                "run_id": run_id,
-                "f1": f1,
-                "accuracy": acc,
-                "precision": prec,
-                "recall": rec
+def run_random_forest_experiment():
+    """Run Random Forest experiment with MLflow tracking"""
+    print("\n" + "="*50)
+    print("EXPERIMENT 1: RANDOM FOREST")
+    print("="*50)
+    
+    try:
+        with mlflow.start_run(run_name="random_forest"):
+            start_time = time.time()
+            
+            # Load data
+            df = load_and_preprocess_data()
+            if df is None:
+                return None, None
+            
+            # Create TF-IDF features
+            X, y, vectorizer = create_tfidf_features(df)
+            if X is None:
+                return None, None
+            
+            # Split the data
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42, stratify=y
+            )
+            
+            print(f"📊 Training set: {X_train.shape[0]} samples")
+            print(f"📊 Test set: {X_test.shape[0]} samples")
+            
+            # Log parameters
+            mlflow.log_params({
+                'model_type': 'random_forest',
+                'n_estimators': 50,
+                'max_features': 1000,
+                'test_size': 0.2,
+                'random_state': 42,
+                'dataset_size': len(df)
             })
-    return results
+            
+            # Initialize and train Random Forest
+            rf_model = RandomForestClassifier(
+                n_estimators=50,
+                random_state=42,
+                n_jobs=-1
+            )
+            
+            # Train model
+            training_start = time.time()
+            print("🔄 Training Random Forest...")
+            rf_model.fit(X_train, y_train)
+            training_time = time.time() - training_start
+            
+            # Make predictions
+            y_pred = rf_model.predict(X_test)
+            y_pred_proba = rf_model.predict_proba(X_test)[:, 1]
+            
+            # Calculate metrics
+            accuracy = accuracy_score(y_test, y_pred)
+            roc_auc = roc_auc_score(y_test, y_pred_proba)
+            
+            # Classification report
+            class_report = classification_report(y_test, y_pred, output_dict=True)
+            
+            total_time = time.time() - start_time
+            
+            # Log metrics
+            mlflow.log_metrics({
+                'accuracy': accuracy,
+                'roc_auc': roc_auc,
+                'training_time': training_time,
+                'total_time': total_time,
+                'precision_0': class_report['0']['precision'],
+                'recall_0': class_report['0']['recall'],
+                'f1_0': class_report['0']['f1-score'],
+                'precision_1': class_report['1']['precision'],
+                'recall_1': class_report['1']['recall'],
+                'f1_1': class_report['1']['f1-score']
+            })
+            
+            # Print results
+            print(f"⏱️  Training time: {training_time:.2f} seconds")
+            print(f"⏱️  Total execution time: {total_time:.2f} seconds")
+            print(f"🎯 Accuracy: {accuracy:.4f}")
+            print(f"📈 ROC AUC: {roc_auc:.4f}")
+            
+            # Create and log confusion matrix
+            cm_plot_path = plot_confusion_matrix(y_test, y_pred, "Random Forest")
+            if cm_plot_path:
+                mlflow.log_artifact(cm_plot_path)
+            
+            # Log model
+            mlflow.sklearn.log_model(rf_model, "random_forest_model")
+            
+            # Save model locally
+            model_path = 'models/random_forest_model.pkl'
+            joblib.dump(rf_model, model_path)
+            mlflow.log_artifact(model_path)
+            print(f"✅ Model saved to: {model_path}")
+            
+            # Save metrics
+            metrics = {
+                'model': 'random_forest',
+                'accuracy': float(accuracy),
+                'roc_auc': float(roc_auc),
+                'training_time': float(training_time),
+                'total_time': float(total_time),
+                'dataset_size': len(df),
+                'test_size': len(y_test)
+            }
+            
+            # Create metrics directory if it doesn't exist
+            os.makedirs('metrics', exist_ok=True)
+            with open('metrics/rf_metrics.json', 'w') as f:
+                json.dump(metrics, f, indent=2)
+            
+            mlflow.log_artifact('metrics/rf_metrics.json')
+            
+            print("✅ Random Forest experiment completed successfully!")
+            return metrics, rf_model
+            
+    except Exception as e:
+        print(f"❌ Error in Random Forest experiment: {e}")
+        return None, None
 
-def get_best_run(experiment_name=EXPERIMENT_NAME):
-    client = MlflowClient()
-    exp = client.get_experiment_by_name(experiment_name)
-    if exp is None:
-        raise ValueError(f"Experiment '{experiment_name}' not found.")
-    # search runs ordering by f1 desc
-    runs = client.search_runs(exp.experiment_id, order_by=["metrics.f1 DESC"], max_results=100)
-    if not runs:
-        raise ValueError("No runs found in experiment.")
-    best = runs[0]
-    # extract metrics safely
-    metrics = best.data.metrics
-    return {
-        "run_id": best.info.run_id,
-        "metrics": metrics,
-        "params": best.data.params,
-        "tags": best.data.tags
-    }
+def run_logistic_regression_experiment():
+    """Run Logistic Regression experiment with MLflow tracking"""
+    print("\n" + "="*50)
+    print("EXPERIMENT 2: LOGISTIC REGRESSION")
+    print("="*50)
+    
+    try:
+        with mlflow.start_run(run_name="logistic_regression"):
+            start_time = time.time()
+            
+            # Load data
+            df = load_and_preprocess_data()
+            if df is None:
+                return None, None
+            
+            # Create TF-IDF features
+            X, y, vectorizer = create_tfidf_features(df)
+            if X is None:
+                return None, None
+            
+            # Split the data
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42, stratify=y
+            )
+            
+            print(f"📊 Training set: {X_train.shape[0]} samples")
+            print(f"📊 Test set: {X_test.shape[0]} samples")
+            
+            # Log parameters
+            mlflow.log_params({
+                'model_type': 'logistic_regression',
+                'max_features': 1000,
+                'test_size': 0.2,
+                'random_state': 42,
+                'max_iter': 1000,
+                'dataset_size': len(df)
+            })
+            
+            # Initialize and train Logistic Regression
+            lr_model = LogisticRegression(
+                random_state=42,
+                max_iter=1000,
+                n_jobs=-1
+            )
+            
+            # Train model
+            training_start = time.time()
+            print("🔄 Training Logistic Regression...")
+            lr_model.fit(X_train, y_train)
+            training_time = time.time() - training_start
+            
+            # Make predictions
+            y_pred = lr_model.predict(X_test)
+            y_pred_proba = lr_model.predict_proba(X_test)[:, 1]
+            
+            # Calculate metrics
+            accuracy = accuracy_score(y_test, y_pred)
+            roc_auc = roc_auc_score(y_test, y_pred_proba)
+            
+            # Classification report
+            class_report = classification_report(y_test, y_pred, output_dict=True)
+            
+            total_time = time.time() - start_time
+            
+            # Log metrics
+            mlflow.log_metrics({
+                'accuracy': accuracy,
+                'roc_auc': roc_auc,
+                'training_time': training_time,
+                'total_time': total_time,
+                'precision_0': class_report['0']['precision'],
+                'recall_0': class_report['0']['recall'],
+                'f1_0': class_report['0']['f1-score'],
+                'precision_1': class_report['1']['precision'],
+                'recall_1': class_report['1']['recall'],
+                'f1_1': class_report['1']['f1-score']
+            })
+            
+            # Print results
+            print(f"⏱️  Training time: {training_time:.2f} seconds")
+            print(f"⏱️  Total execution time: {total_time:.2f} seconds")
+            print(f"🎯 Accuracy: {accuracy:.4f}")
+            print(f"📈 ROC AUC: {roc_auc:.4f}")
+            
+            # Create and log confusion matrix
+            cm_plot_path = plot_confusion_matrix(y_test, y_pred, "Logistic Regression")
+            if cm_plot_path:
+                mlflow.log_artifact(cm_plot_path)
+            
+            # Log model
+            mlflow.sklearn.log_model(lr_model, "logistic_regression_model")
+            
+            # Save model locally
+            model_path = 'models/logistic_regression_model.pkl'
+            joblib.dump(lr_model, model_path)
+            mlflow.log_artifact(model_path)
+            print(f"✅ Model saved to: {model_path}")
+            
+            # Save metrics
+            metrics = {
+                'model': 'logistic_regression',
+                'accuracy': float(accuracy),
+                'roc_auc': float(roc_auc),
+                'training_time': float(training_time),
+                'total_time': float(total_time),
+                'dataset_size': len(df),
+                'test_size': len(y_test)
+            }
+            
+            # Create metrics directory if it doesn't exist
+            os.makedirs('metrics', exist_ok=True)
+            with open('metrics/lr_metrics.json', 'w') as f:
+                json.dump(metrics, f, indent=2)
+            
+            mlflow.log_artifact('metrics/lr_metrics.json')
+            
+            print("✅ Logistic Regression experiment completed successfully!")
+            return metrics, lr_model
+            
+    except Exception as e:
+        print(f"❌ Error in Logistic Regression experiment: {e}")
+        return None, None
 
-def load_model_and_vectorizer(run_id):
-    # model is logged under artifact path "model" in our script
-    model_uri = f"runs:/{run_id}/model"
-    model = mlflow.sklearn.load_model(model_uri)
-    # vectorizer artifact path
-    # use mlflow.artifacts.download_artifacts to get local file
-    vect_art_path = f"runs:/{run_id}/preprocessing/tfidf_vectorizer.joblib"
-    local_vect_path = mlflow.artifacts.download_artifacts(vect_art_path)
-    vect = joblib.load(local_vect_path)
-    return model, vect
+def register_best_model(rf_metrics, lr_metrics, rf_model, lr_model):
+    """Register the best model based on accuracy"""
+    
+    if rf_metrics is None or lr_metrics is None:
+        print("❌ Cannot register best model - one or both experiments failed")
+        return None, None
+    
+    try:
+        # Determine best model
+        if rf_metrics['accuracy'] >= lr_metrics['accuracy']:
+            best_model = rf_model
+            best_model_name = "random_forest"
+            best_accuracy = rf_metrics['accuracy']
+            best_metrics = rf_metrics
+        else:
+            best_model = lr_model
+            best_model_name = "logistic_regression"
+            best_accuracy = lr_metrics['accuracy']
+            best_metrics = lr_metrics
+        
+        # Register best model in MLflow
+        with mlflow.start_run(run_name="best_model") as run:
+            mlflow.log_params({
+                'best_model': best_model_name,
+                'best_accuracy': best_accuracy
+            })
+            
+            mlflow.log_metrics({
+                'accuracy': best_metrics['accuracy'],
+                'roc_auc': best_metrics['roc_auc'],
+                'training_time': best_metrics['training_time']
+            })
+            
+            # Log best model
+            mlflow.sklearn.log_model(best_model, "best_model")
+            
+            # Save best model locally
+            best_model_path = 'models/best_model.pkl'
+            joblib.dump(best_model, best_model_path)
+            mlflow.log_artifact(best_model_path)
+            
+            # Save best model info
+            best_model_info = {
+                'model_name': best_model_name,
+                'accuracy': best_accuracy,
+                'registered_at': datetime.now().isoformat(),
+                'run_id': run.info.run_id
+            }
+            
+            with open('models/best_model_info.json', 'w') as f:
+                json.dump(best_model_info, f, indent=2)
+            
+            mlflow.log_artifact('models/best_model_info.json')
+            
+            print(f"\n🏆 Best Model Registered: {best_model_name}")
+            print(f"📊 Accuracy: {best_accuracy:.4f}")
+            print(f"🔗 Run ID: {run.info.run_id}")
+            
+            return best_model, best_model_name
+            
+    except Exception as e:
+        print(f"❌ Error registering best model: {e}")
+        return None, None
 
-def demo_inference(model, vect, texts):
-    X = vect.transform(texts)
-    preds = model.predict(X)
-    probs = None
-    if hasattr(model, "predict_proba"):
-        probs = model.predict_proba(X)[:, 1]
-    return preds, probs
-
-def main(args):
-    print("MLflow Tracking URI:", mlflow.get_tracking_uri())
-    print("Using experiment name:", EXPERIMENT_NAME)
-    df = load_data(DATA_PATH)
-    print("Loaded data shape:", df.shape)
-    print("Label distribution:\n", df['label'].value_counts().to_dict())
-
-    X = df['text'].astype(str).values
-    y = df['label'].astype(int).values
-
-    X_train_texts, X_test_texts, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
-    )
-
-    # Preprocess
-    X_train_tfidf, vect = preprocess_texts(X_train_texts, max_features=10000)
-    X_test_tfidf = vect.transform(X_test_texts)
-
-    # Train & log
-    print("Starting training and MLflow logging...")
-    train_results = train_and_log(X_train_tfidf, y_train, X_test_tfidf, y_test, vect, experiment_name=EXPERIMENT_NAME)
-
-    # Compare and pick best
-    print("\nSelecting best run from MLflow by F1 metric...")
-    best = get_best_run(EXPERIMENT_NAME)
-    print("Best run_id:", best["run_id"])
-    print("Best metrics:", best["metrics"])
-
-    # Load best model + vectorizer
-    model, loaded_vect = load_model_and_vectorizer(best["run_id"])
-    print("Loaded best model and vectorizer from run", best["run_id"])
-
-    # Evaluate best model on test set for confirmation
-    X_test = loaded_vect.transform(X_test_texts)
-    preds = model.predict(X_test)
-    f1 = f1_score(y_test, preds)
-    acc = accuracy_score(y_test, preds)
-    print(f"Best model confirmation on holdout test: f1={f1:.4f}, acc={acc:.4f}")
-
-    # Demo inference on sample texts
-    demo_texts = [
-        "Free entry in 2 a wkly comp to win FA Cup tickets! Text WIN to 12345",
-        "Hi John, can we reschedule our 3pm meeting to 4pm?"
-    ]
-    preds, probs = demo_inference(model, loaded_vect, demo_texts)
-    for t, p, pr in zip(demo_texts, preds, probs if probs is not None else [None]*len(preds)):
-        label = "spam" if int(p) == 1 else "ham"
-        print(f"\nText: {t}\nPredicted: {label} (prob={pr:.4f} if available)")
-
-    # Optionally save the best model locally (mlflow already saved artifacts in mlruns or remote tracking)
-    out_dir = args.output_dir
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-        # Save using joblib for quick local reuse
-        local_model_path = os.path.join(out_dir, f"best_model_{best['run_id']}.joblib")
-        joblib.dump(model, local_model_path)
-        local_vect_path = os.path.join(out_dir, "tfidf_vectorizer.joblib")
-        joblib.dump(loaded_vect, local_vect_path)
-        print(f"\nSaved best model -> {local_model_path}")
-        print(f"Saved vectorizer -> {local_vect_path}")
+def main():
+    """Run both experiments and compare results"""
+    print("🚀 SMS Spam Detection Experiments with MLflow")
+    print("=" * 60)
+    
+    # Setup MLflow
+    setup_mlflow()
+    
+    # Create directories
+    os.makedirs('models', exist_ok=True)
+    os.makedirs('metrics', exist_ok=True)
+    os.makedirs('mlruns', exist_ok=True)
+    
+    # Run experiments
+    rf_results, rf_model = run_random_forest_experiment()
+    lr_results, lr_model = run_logistic_regression_experiment()
+    
+    # Register best model only if both experiments succeeded
+    if rf_results is not None and lr_results is not None:
+        best_model, best_model_name = register_best_model(rf_results, lr_results, rf_model, lr_model)
+        
+        # Compare results
+        print("\n" + "="*50)
+        print("EXPERIMENT COMPARISON")
+        print("="*50)
+        print(f"Random Forest:")
+        print(f"  - Accuracy: {rf_results['accuracy']:.4f}")
+        print(f"  - ROC AUC: {rf_results['roc_auc']:.4f}")
+        print(f"  - Training Time: {rf_results['training_time']:.2f}s")
+        
+        print(f"\nLogistic Regression:")
+        print(f"  - Accuracy: {lr_results['accuracy']:.4f}")
+        print(f"  - ROC AUC: {lr_results['roc_auc']:.4f}")
+        print(f"  - Training Time: {lr_results['training_time']:.2f}s")
+        
+        print(f"\nComparison:")
+        if rf_results['accuracy'] > lr_results['accuracy']:
+            accuracy_diff = rf_results['accuracy'] - lr_results['accuracy']
+            print(f"  ✓ Random Forest is better by {accuracy_diff:.4f} accuracy")
+        elif lr_results['accuracy'] > rf_results['accuracy']:
+            accuracy_diff = lr_results['accuracy'] - rf_results['accuracy']
+            print(f"  ✓ Logistic Regression is better by {accuracy_diff:.4f} accuracy")
+        else:
+            print("  ⚠ Both models have the same accuracy")
+        
+        if rf_results['training_time'] < lr_results['training_time']:
+            print(f"  ✓ Random Forest is faster to train")
+        else:
+            print(f"  ✓ Logistic Regression is faster to train")
+        
+        if best_model_name:
+            print(f"\n🎯 Best Model Selected: {best_model_name}")
+            print(f"📈 Best Accuracy: {max(rf_results['accuracy'], lr_results['accuracy']):.4f}")
+    
+    else:
+        print("\n❌ One or both experiments failed. Check the errors above.")
+        
+    print("\n" + "="*60)
+    print("🎉 Training completed! Next steps:")
+    print("1. 🔍 Test predictions: python predict_spam.py")
+    print("2. 🌐 View experiments: python start_mlflow_ui.py")
+    print("="*60)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train spam models and log to MLflow (single-file).")
-    parser.add_argument("--output-dir", "-o", default="", help="Optional local output directory to save best model & vectorizer.")
-    args = parser.parse_args()
-    main(args)
+    main()

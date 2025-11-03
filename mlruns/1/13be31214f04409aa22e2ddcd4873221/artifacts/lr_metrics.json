@@ -2,8 +2,8 @@
   "model": "logistic_regression",
   "accuracy": 0.9739910313901345,
   "roc_auc": 0.9813247738546834,
-  "training_time": 4.753980875015259,
-  "total_time": 5.345859527587891,
+  "training_time": 4.530667781829834,
+  "total_time": 5.062013626098633,
   "dataset_size": 5572,
   "test_size": 1115
 }
