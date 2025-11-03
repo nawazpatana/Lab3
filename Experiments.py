@@ -171,7 +171,7 @@ def main():
     print("Running each experiment for approximately 5 seconds...")
     
     # Run experiments
-   # rf_results = run_random_forest_experiment()
+    rf_results = run_random_forest_experiment()
     lr_results = run_logistic_regression_experiment()
     
     # Compare results
@@ -179,29 +179,29 @@ def main():
     print("EXPERIMENT COMPARISON")
     print("="*50)
     print(f"Random Forest:")
-   # print(f"  - Accuracy: {rf_results['accuracy']:.4f}")
-   # print(f"  - Training Time: {rf_results['training_time']:.2f}s")
-   # print(f"  - Total Time: {rf_results['total_time']:.2f}s")
+   #print(f"  - Accuracy: {rf_results['accuracy']:.4f}")
+   #print(f"  - Training Time: {rf_results['training_time']:.2f}s")
+   #print(f"  - Total Time: {rf_results['total_time']:.2f}s")
     
     print(f"\nLogistic Regression:")
     print(f"  - Accuracy: {lr_results['accuracy']:.4f}")
     print(f"  - Training Time: {lr_results['training_time']:.2f}s")
     print(f"  - Total Time: {lr_results['total_time']:.2f}s")
     
-    # print(f"\nComparison:")
-    # if rf_results['accuracy'] > lr_results['accuracy']:
-    #     accuracy_diff = rf_results['accuracy'] - lr_results['accuracy']
-    #     print(f"  ✓ Random Forest is better by {accuracy_diff:.4f} accuracy")
-    # elif lr_results['accuracy'] > rf_results['accuracy']:
-    #     accuracy_diff = lr_results['accuracy'] - rf_results['accuracy']
-    #     print(f"  ✓ Logistic Regression is better by {accuracy_diff:.4f} accuracy")
-    # else:
-    #     print("  ⚠ Both models have the same accuracy")
+    print(f"\nComparison:")
+    if rf_results['accuracy'] > lr_results['accuracy']:
+        accuracy_diff = rf_results['accuracy'] - lr_results['accuracy']
+        print(f"  ✓ Random Forest is better by {accuracy_diff:.4f} accuracy")
+    elif lr_results['accuracy'] > rf_results['accuracy']:
+        accuracy_diff = lr_results['accuracy'] - rf_results['accuracy']
+        print(f"  ✓ Logistic Regression is better by {accuracy_diff:.4f} accuracy")
+    else:
+        print("  ⚠ Both models have the same accuracy")
     
-    # if rf_results['training_time'] < lr_results['training_time']:
-    #     print(f"  ✓ Random Forest is faster to train")
-    # else:
-    #     print(f"  ✓ Logistic Regression is faster to train")
+    if rf_results['training_time'] < lr_results['training_time']:
+        print(f"  ✓ Random Forest is faster to train")
+    else:
+        print(f"  ✓ Logistic Regression is faster to train")
 
 if __name__ == "__main__":
     main()

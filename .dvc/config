@@ -1,0 +1,4 @@
+[core]
+    remote = origin
+['remote "origin"']
+    url = https://github.com/nawazishpatana/Lab3.dvc
