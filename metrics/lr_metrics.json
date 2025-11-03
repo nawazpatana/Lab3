@@ -1,0 +1,8 @@
+{
+  "model": "logistic_regression",
+  "accuracy": 0.9739910313901345,
+  "training_time": 3.1277570724487305,
+  "total_time": 3.420407295227051,
+  "dataset_size": 5572,
+  "test_size": 1115
+}
