@@ -3,6 +3,45 @@ import json
 import subprocess
 import sys
 from datetime import datetime
+import os
+import mlflow
+from dagshub import DagsHub
+
+def setup_mlflow():
+    """Setup MLflow tracking with DagsHub"""
+    
+    # DagsHub repository information
+    DAGSHUB_USERNAME = "nawazishpatana"
+    DAGSHUB_REPO_NAME = "Lab3.mlflow"
+    
+    # Set up DagsHub connection
+    os.environ['MLFLOW_TRACKING_URI'] = f"https://dagshub.com/{DAGSHUB_USERNAME}/{DAGSHUB_REPO_NAME}.mlflow"
+    
+    # Setup DagsHub - this will handle authentication
+    DagsHub.init(repo_owner=DAGSHUB_USERNAME, repo_name=DAGSHUB_REPO_NAME, mlflow=True)
+    
+    try:
+        mlflow.set_experiment("spam-detection-experiment")
+        print("Successfully connected to DagsHub MLflow tracking!")
+        return True
+    except Exception as e:
+        print(f"Error setting up DagsHub experiment: {e}")
+        return False
+
+def run_logistic_regression_experiment():
+    """Main experiment function with DagsHub tracking"""
+    
+    if not setup_mlflow():
+        print("Failed to setup MLflow with DagsHub. Using local tracking as fallback.")
+        mlflow.set_tracking_uri("file:///./mlruns")
+        mlflow.set_experiment("spam-detection-experiment")
+    
+    # Start MLflow run
+    with mlflow.start_run():
+        # Log parameters
+        mlflow.log_param("model_type", "logistic_regression")
+        mlflow.log_param("random_state", 42)
+
 
 def run_experiment(script_name):
     """Run an experiment script and capture its results"""
