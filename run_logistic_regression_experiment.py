@@ -13,21 +13,20 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+def setup_mlflow():
+    """Setup MLflow tracking for this experiment"""
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    mlflow.set_experiment("spam-detection-experiment")
+    print("✅ MLflow setup complete for Logistic Regression")
+
 def load_and_preprocess_data():
     """Load and preprocess the spam dataset"""
     print("Loading and preprocessing data...")
     try:
-        # Load the data
         df = pd.read_csv('./data/spam.csv', encoding='latin-1')
-        
-        # Clean the data - keep only relevant columns and remove empty ones
         df = df[['v1', 'v2']].copy()
         df.columns = ['label', 'message']
-        
-        # Remove any rows with missing values
         df = df.dropna()
-        
-        # Convert labels to binary (ham=0, spam=1)
         df['label'] = df['label'].map({'ham': 0, 'spam': 1})
         
         print(f"✅ Dataset loaded: {len(df)} messages")
@@ -40,17 +39,16 @@ def load_and_preprocess_data():
         return None
 
 def create_tfidf_features(df, max_features=1000):
-    """Create TF-IDF features and save vectorizer"""
+    """Create TF-IDF features"""
     try:
         vectorizer = TfidfVectorizer(max_features=max_features, stop_words='english')
         X = vectorizer.fit_transform(df['message'])
         y = df['label']
         
-        # Save vectorizer for inference
+        # Save vectorizer
         os.makedirs('models', exist_ok=True)
-        vectorizer_path = 'models/tfidf_vectorizer.pkl'
-        joblib.dump(vectorizer, vectorizer_path)
-        print(f"✅ Vectorizer saved to: {vectorizer_path}")
+        joblib.dump(vectorizer, 'models/tfidf_vectorizer.pkl')
+        print("✅ TF-IDF features created and vectorizer saved")
         
         return X, y, vectorizer
         
@@ -59,7 +57,7 @@ def create_tfidf_features(df, max_features=1000):
         return None, None, None
 
 def plot_confusion_matrix(y_true, y_pred, model_name):
-    """Create and save confusion matrix plot"""
+    """Create and save confusion matrix"""
     try:
         plt.figure(figsize=(8, 6))
         cm = confusion_matrix(y_true, y_pred)
@@ -71,7 +69,6 @@ def plot_confusion_matrix(y_true, y_pred, model_name):
         plt.xlabel('Predicted Label')
         plt.tight_layout()
         
-        # Save plot
         plot_path = f'confusion_matrix_{model_name.lower().replace(" ", "_")}.png'
         plt.savefig(plot_path)
         plt.close()
@@ -86,11 +83,15 @@ def plot_confusion_matrix(y_true, y_pred, model_name):
 def run_logistic_regression_experiment():
     """Run Logistic Regression experiment with MLflow tracking"""
     print("\n" + "="*50)
-    print("EXPERIMENT 2: LOGISTIC REGRESSION")
+    print("🎯 EXPERIMENT: LOGISTIC REGRESSION (Running in MLflow)")
     print("="*50)
     
+    # Setup MLflow for this experiment
+    setup_mlflow()
+    
     try:
-        with mlflow.start_run(run_name="logistic_regression"):
+        # Start MLflow run
+        with mlflow.start_run(run_name="logistic_regression_experiment"):
             start_time = time.time()
             
             # Load data
@@ -98,12 +99,12 @@ def run_logistic_regression_experiment():
             if df is None:
                 return None, None
             
-            # Create TF-IDF features
+            # Create features
             X, y, vectorizer = create_tfidf_features(df)
             if X is None:
                 return None, None
             
-            # Split the data
+            # Split data
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.2, random_state=42, stratify=y
             )
@@ -111,7 +112,7 @@ def run_logistic_regression_experiment():
             print(f"📊 Training set: {X_train.shape[0]} samples")
             print(f"📊 Test set: {X_test.shape[0]} samples")
             
-            # Log parameters
+            # Log parameters to MLflow
             mlflow.log_params({
                 'model_type': 'logistic_regression',
                 'max_features': 1000,
@@ -121,33 +122,30 @@ def run_logistic_regression_experiment():
                 'dataset_size': len(df)
             })
             
-            # Initialize and train Logistic Regression
+            # Train model
             lr_model = LogisticRegression(
                 random_state=42,
                 max_iter=1000,
                 n_jobs=-1
             )
             
-            # Train model
             training_start = time.time()
             print("🔄 Training Logistic Regression...")
             lr_model.fit(X_train, y_train)
             training_time = time.time() - training_start
             
-            # Make predictions
+            # Predictions
             y_pred = lr_model.predict(X_test)
             y_pred_proba = lr_model.predict_proba(X_test)[:, 1]
             
             # Calculate metrics
             accuracy = accuracy_score(y_test, y_pred)
             roc_auc = roc_auc_score(y_test, y_pred_proba)
-            
-            # Classification report
             class_report = classification_report(y_test, y_pred, output_dict=True)
             
             total_time = time.time() - start_time
             
-            # Log metrics
+            # Log metrics to MLflow
             mlflow.log_metrics({
                 'accuracy': accuracy,
                 'roc_auc': roc_auc,
@@ -163,7 +161,6 @@ def run_logistic_regression_experiment():
             
             # Print results
             print(f"⏱️  Training time: {training_time:.2f} seconds")
-            print(f"⏱️  Total execution time: {total_time:.2f} seconds")
             print(f"🎯 Accuracy: {accuracy:.4f}")
             print(f"📈 ROC AUC: {roc_auc:.4f}")
             
@@ -172,16 +169,15 @@ def run_logistic_regression_experiment():
             if cm_plot_path:
                 mlflow.log_artifact(cm_plot_path)
             
-            # Log model
+            # Log model to MLflow
             mlflow.sklearn.log_model(lr_model, "logistic_regression_model")
             
             # Save model locally
             model_path = 'models/logistic_regression_model.pkl'
             joblib.dump(lr_model, model_path)
             mlflow.log_artifact(model_path)
-            print(f"✅ Model saved to: {model_path}")
             
-            # Save metrics
+            # Save metrics locally
             metrics = {
                 'model': 'logistic_regression',
                 'accuracy': float(accuracy),
@@ -192,14 +188,15 @@ def run_logistic_regression_experiment():
                 'test_size': len(y_test)
             }
             
-            # Create metrics directory if it doesn't exist
             os.makedirs('metrics', exist_ok=True)
             with open('metrics/lr_metrics.json', 'w') as f:
                 json.dump(metrics, f, indent=2)
             
             mlflow.log_artifact('metrics/lr_metrics.json')
             
-            print("✅ Logistic Regression experiment completed successfully!")
+            print("✅ Logistic Regression experiment completed and logged to MLflow!")
+            print(f"🔗 Run ID: {mlflow.active_run().info.run_id}")
+            
             return metrics, lr_model
             
     except Exception as e:
@@ -207,13 +204,4 @@ def run_logistic_regression_experiment():
         return None, None
 
 if __name__ == "__main__":
-    # Setup MLflow for standalone execution
-    mlflow.set_tracking_uri("sqlite:///mlflow.db")
-    mlflow.set_experiment("spam-detection-experiment")
-    
-    # Create directories
-    os.makedirs('models', exist_ok=True)
-    os.makedirs('metrics', exist_ok=True)
-    
-    # Run the experiment
     run_logistic_regression_experiment()
