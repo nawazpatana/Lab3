@@ -2,8 +2,8 @@
   "model": "random_forest",
   "accuracy": 0.9766816143497757,
   "roc_auc": 0.9814637264301695,
-  "training_time": 1.525691032409668,
-  "total_time": 3.030097484588623,
+  "training_time": 1.784402847290039,
+  "total_time": 2.8552308082580566,
   "dataset_size": 5572,
   "test_size": 1115
 }
